@@ -1,166 +1,233 @@
 #!/usr/bin/env python3
-"""Draw the 22 November 2026 front page: one 1024x1024 PNG.
+"""Build the 22 November 2026 front page as one 1024x1024 PNG.
 
-Layout, top to bottom: navy masthead, gold rule, hero photo, a 2x2 grid of
-main stories, a navy rule, an IN BRIEF block (2x2), and a footer line.
-All headlines were verified against news reports dated 22 November 2026.
-Run from the repo root:  python3 draw_frontpage.py  ->  entry.png
+The page is a newspaper front: a navy masthead with the date, a hero
+illustration, four main stories in a two-by-two grid, an IN BRIEF band
+with four short items, and a footer. Headlines were checked against news
+reports dated 22 November 2026. Run from the repo root:
+
+    python3 draw_frontpage.py
+
+and entry.png appears next to this script.
 """
 import os
-from PIL import Image, ImageDraw, ImageFont
 
-W, H = 1024, 1024
-BASE = os.path.dirname(os.path.abspath(__file__))
+from PIL import Image as PilImage
+from PIL import ImageDraw as PilDraw
+from PIL import ImageFont as PilFont
 
-CREAM = (246, 241, 231)
-NAVY = (27, 47, 74)
-GOLD = (201, 162, 39)
-RED = (176, 30, 30)
-INK = (26, 26, 26)
-GREY = (85, 85, 85)
-FAINT = (170, 165, 155)
+PAGE_W = 1024
+PAGE_H = 1024
+MARGIN = 36
+GUTTER = 512
+COL_W = 452
+MASTHEAD_H = 108
+HERO_H = 260
 
-SERIF = "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
-SERIF_B = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
-SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-SANS_B = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+PAPER = (246, 241, 231)
+NAVY_INK = (27, 47, 74)
+GOLD_LINE = (201, 162, 39)
+ALERT_RED = (176, 30, 30)
+BODY_INK = (26, 26, 26)
+MUTED = (85, 85, 85)
+HAIRLINE = (170, 165, 155)
+WHITE = (255, 255, 255)
+
+FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
 
-def font(path, size):
-    return ImageFont.truetype(path, size)
+def load_fonts():
+    """Return the four typefaces the page uses, keyed by role."""
+    return {
+        "masthead": PilFont.truetype(f"{FONT_DIR}/DejaVuSerif-Bold.ttf", 62),
+        "date": PilFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 19),
+        "kicker": PilFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 17),
+        "headline": PilFont.truetype(f"{FONT_DIR}/DejaVuSerif-Bold.ttf", 30),
+        "deck": PilFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 17),
+        "section": PilFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 19),
+        "brief_head": PilFont.truetype(f"{FONT_DIR}/DejaVuSans-Bold.ttf", 16),
+        "brief_deck": PilFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 14),
+        "footer": PilFont.truetype(f"{FONT_DIR}/DejaVuSans.ttf", 15),
+    }
 
 
-def wrap(draw, text, fnt, max_w):
-    """Greedy word wrap; returns a list of lines that fit max_w."""
-    lines, cur = [], ""
-    for word in text.split():
-        trial = word if not cur else cur + " " + word
-        if draw.textlength(trial, font=fnt) <= max_w:
-            cur = trial
+def text_block(draw, x, y, text, face, fill, width, leading):
+    """Draw text wrapped to width; return the y below its last line."""
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        trial = word if not current else f"{current} {word}"
+        if draw.textlength(trial, font=face) <= width:
+            current = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
-
-
-def para(draw, x, y, text, fnt, fill, max_w, leading):
-    """Draw wrapped text; returns the y just below the last line."""
-    for line in wrap(draw, text, fnt, max_w):
-        draw.text((x, y), line, font=fnt, fill=fill)
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    for line in lines:
+        draw.text((x, y), line, font=face, fill=fill)
         y += leading
     return y
 
 
-def tracked(draw, cx, y, text, fnt, fill, tracking):
-    """Draw centred text with extra space between letters."""
-    widths = [draw.textlength(ch, font=fnt) for ch in text]
+def tracked_centre(draw, cx, y, text, face, fill, tracking):
+    """Draw text centred on cx with extra space between letters."""
+    widths = [draw.textlength(ch, font=face) for ch in text]
     total = sum(widths) + tracking * (len(text) - 1)
     x = cx - total / 2
     for ch, w in zip(text, widths):
-        draw.text((x, y), ch, font=fnt, fill=fill)
+        draw.text((x, y), ch, font=face, fill=fill)
         x += w + tracking
-    return total
 
 
-def cover(im, w, h):
-    """Resize + centre-crop so the image exactly covers w x h."""
-    iw, ih = im.size
-    scale = max(w / iw, h / ih)
-    im = im.resize((round(iw * scale), round(ih * scale)), Image.LANCZOS)
-    left = (im.width - w) // 2
-    top = (im.height - h) // 2
-    return im.crop((left, top, left + w, top + h))
+def fit_cover(image, width, height):
+    """Scale and centre-crop an image so it exactly covers width x height."""
+    iw, ih = image.size
+    scale = max(width / iw, height / ih)
+    grown = image.resize(
+        (round(iw * scale), round(ih * scale)), PilImage.LANCZOS
+    )
+    left = (grown.width - width) // 2
+    top = (grown.height - height) // 2
+    return grown.crop((left, top, left + width, top + height))
 
 
-MAIN = [
-    ("EUROPE \u00b7 NATO", "Russian missiles land in Poland",
-     "NATO calls it a violation as Europe held military drills nearby."),
-    ("ASIA \u00b7 SUMMIT", "Trump, Xi and Putin talk nukes, no breakthrough",
-     "Rare three-way talks on nuclear risks end with no deal."),
-    ("MIDDLE EAST", "Houthis launch revenge strikes on Saudi capital",
-     "Strikes hit Riyadh as Gulf tensions climb again."),
-    ("CLIMATE \u00b7 COP31", "COP31 reaches final day, deal still short",
-     "Countries demand a stronger climate deal in Antalya."),
+STORIES = [
+    {
+        "kicker": "EUROPE \u00b7 NATO",
+        "head": "Russian missiles land in Poland",
+        "deck": "NATO calls it a violation as Europe held military drills nearby.",
+    },
+    {
+        "kicker": "ASIA \u00b7 SUMMIT",
+        "head": "Trump, Xi and Putin talk nukes, no breakthrough",
+        "deck": "Rare three-way talks on nuclear risks end with no deal.",
+    },
+    {
+        "kicker": "MIDDLE EAST",
+        "head": "Houthis launch revenge strikes on Saudi capital",
+        "deck": "Strikes hit Riyadh as Gulf tensions climb again.",
+    },
+    {
+        "kicker": "CLIMATE \u00b7 COP31",
+        "head": "COP31 reaches final day, deal still short",
+        "deck": "Countries demand a stronger climate deal in Antalya.",
+    },
 ]
 
 BRIEFS = [
-    ("Brazil town clears rubble after deadly storm",
-     "\u201cWe lost everything,\u201d residents say after the storm."),
-    ("6.7-magnitude quake hits Peru",
-     "No deaths reported after the strong tremor."),
-    ("Nvidia faces US accounting probe",
-     "Shares under pressure amid deepening turmoil."),
-    ("Rohingyas hail genocide verdict on Myanmar",
-     "World court ruling welcomed after years of waiting."),
+    {
+        "head": "Brazil town clears rubble after deadly storm",
+        "deck": "\u201cWe lost everything,\u201d residents say after the storm.",
+    },
+    {
+        "head": "6.7-magnitude quake hits Peru",
+        "deck": "No deaths reported after the strong tremor.",
+    },
+    {
+        "head": "Nvidia faces US accounting probe",
+        "deck": "Shares under pressure amid deepening turmoil.",
+    },
+    {
+        "head": "Rohingyas hail genocide verdict on Myanmar",
+        "deck": "World court ruling welcomed after years of waiting.",
+    },
 ]
 
 
-def story_cell(d, x, y, kicker, head, deck, col_w):
-    """Draw one main story; returns the y just below its deck."""
-    d.text((x, y), kicker, font=font(SANS_B, 17), fill=RED)
-    y = para(d, x, y + 24, head, font(SERIF_B, 30), INK, col_w, 36)
-    return para(d, x, y + 4, deck, font(SANS, 17), GREY, col_w, 22)
+def draw_story(draw, fonts, x, y, story):
+    """Draw one main story cell; return the y below its deck."""
+    draw.text((x, y), story["kicker"], font=fonts["kicker"], fill=ALERT_RED)
+    y = text_block(
+        draw, x, y + 24, story["head"], fonts["headline"], BODY_INK,
+        COL_W, 36,
+    )
+    return text_block(
+        draw, x, y + 4, story["deck"], fonts["deck"], MUTED, COL_W, 22
+    )
 
 
-def brief_cell(d, x, y, title, sub, col_w):
-    """Draw one brief; returns the y just below its sub."""
-    d.text((x, y), "\u2022", font=font(SANS_B, 16), fill=INK)
-    y = para(d, x + 22, y, title, font(SANS_B, 16), INK, col_w - 22, 20)
-    return para(d, x + 22, y + 2, sub, font(SANS, 14), GREY, col_w - 22, 18)
+def draw_brief(draw, fonts, x, y, brief):
+    """Draw one brief cell; return the y below its deck."""
+    draw.text((x, y), "\u2022", font=fonts["brief_head"], fill=BODY_INK)
+    y = text_block(
+        draw, x + 22, y, brief["head"], fonts["brief_head"], BODY_INK,
+        COL_W - 22, 20,
+    )
+    return text_block(
+        draw, x + 22, y + 2, brief["deck"], fonts["brief_deck"], MUTED,
+        COL_W - 22, 18,
+    )
 
 
-def main():
-    page = Image.new("RGB", (W, H), CREAM)
-    d = ImageDraw.Draw(page)
+def build_page():
+    """Compose the whole front page and return the image."""
+    fonts = load_fonts()
+    page = PilImage.new("RGB", (PAGE_W, PAGE_H), PAPER)
+    draw = PilDraw.Draw(page)
 
-    # --- masthead ---
-    d.rectangle([0, 0, W, 108], fill=NAVY)
-    d.text((W / 2, 22), "THE WORLD IN ONE DAY", font=font(SERIF_B, 62),
-           fill=(255, 255, 255), anchor="ma")
-    tracked(d, W / 2, 84, "SUNDAY, 22 NOVEMBER 2026", font(SANS_B, 19), GOLD, 5)
-    d.rectangle([0, 108, W, 112], fill=GOLD)
+    draw.rectangle([0, 0, PAGE_W, MASTHEAD_H], fill=NAVY_INK)
+    draw.text(
+        (PAGE_W / 2, 22), "THE WORLD IN ONE DAY", font=fonts["masthead"],
+        fill=WHITE, anchor="ma",
+    )
+    tracked_centre(
+        draw, PAGE_W / 2, 84, "SUNDAY, 22 NOVEMBER 2026",
+        fonts["date"], GOLD_LINE, 5,
+    )
+    draw.rectangle([0, MASTHEAD_H, PAGE_W, MASTHEAD_H + 4], fill=GOLD_LINE)
 
-    # --- hero photo ---
-    hero = Image.open(os.path.join(BASE, "hero.png")).convert("RGB")
-    page.paste(cover(hero, W, 260), (0, 112))
+    here = os.path.dirname(os.path.abspath(__file__))
+    hero = PilImage.open(os.path.join(here, "hero.png")).convert("RGB")
+    page.paste(fit_cover(hero, PAGE_W, HERO_H), (0, MASTHEAD_H + 4))
 
-    # --- main stories: 2 columns x 2 rows, y flows from real cell bottoms ---
-    col_w = 452
-    xs = [36, 536]
-    y = 396
-    row1 = max(story_cell(d, xs[0], y, *MAIN[0], col_w),
-               story_cell(d, xs[1], y, *MAIN[1], col_w))
-    d.line([(512, y), (512, row1)], fill=FAINT, width=1)
-    d.line([(36, row1 + 10), (988, row1 + 10)], fill=FAINT, width=1)
-    y = row1 + 22
-    row2 = max(story_cell(d, xs[0], y, *MAIN[2], col_w),
-               story_cell(d, xs[1], y, *MAIN[3], col_w))
-    d.line([(512, y), (512, row2)], fill=FAINT, width=1)
+    xs = [MARGIN, MARGIN + 500]
+    y = MASTHEAD_H + 4 + HERO_H + 24
+    row_bottom = max(
+        draw_story(draw, fonts, xs[0], y, STORIES[0]),
+        draw_story(draw, fonts, xs[1], y, STORIES[1]),
+    )
+    draw.line([(GUTTER, y), (GUTTER, row_bottom)], fill=HAIRLINE, width=1)
+    draw.line(
+        [(MARGIN, row_bottom + 10), (PAGE_W - MARGIN, row_bottom + 10)],
+        fill=HAIRLINE, width=1,
+    )
+    y = row_bottom + 22
+    row_bottom = max(
+        draw_story(draw, fonts, xs[0], y, STORIES[2]),
+        draw_story(draw, fonts, xs[1], y, STORIES[3]),
+    )
+    draw.line([(GUTTER, y), (GUTTER, row_bottom)], fill=HAIRLINE, width=1)
 
-    # --- navy rule + IN BRIEF ---
-    d.rectangle([36, row2 + 12, 988, row2 + 15], fill=NAVY)
-    y = row2 + 26
-    d.text((36, y), "IN BRIEF", font=font(SANS_B, 19), fill=NAVY)
+    draw.rectangle(
+        [MARGIN, row_bottom + 12, PAGE_W - MARGIN, row_bottom + 15],
+        fill=NAVY_INK,
+    )
+    y = row_bottom + 26
+    draw.text((MARGIN, y), "IN BRIEF", font=fonts["section"], fill=NAVY_INK)
     y += 30
-    brow1 = max(brief_cell(d, xs[0], y, *BRIEFS[0], col_w),
-                brief_cell(d, xs[1], y, *BRIEFS[1], col_w))
-    y = brow1 + 12
-    brief_cell(d, xs[0], y, *BRIEFS[2], col_w)
-    brief_cell(d, xs[1], y, *BRIEFS[3], col_w)
+    first_row = max(
+        draw_brief(draw, fonts, xs[0], y, BRIEFS[0]),
+        draw_brief(draw, fonts, xs[1], y, BRIEFS[1]),
+    )
+    y = first_row + 12
+    draw_brief(draw, fonts, xs[0], y, BRIEFS[2])
+    draw_brief(draw, fonts, xs[1], y, BRIEFS[3])
 
-    # --- footer ---
-    d.text((W / 2, 988),
-           "All stories checked against news reports dated 22 November 2026 "
-           "\u00b7 make.fun news-image-20261122",
-           font=font(SANS, 15), fill=GREY, anchor="ma")
-
-    out = os.path.join(BASE, "entry.png")
-    page.save(out, optimize=True)
-    print("wrote", out)
+    draw.text(
+        (PAGE_W / 2, 988),
+        "All stories checked against news reports dated 22 November 2026 "
+        "\u00b7 make.fun news-image-20261122",
+        font=fonts["footer"], fill=MUTED, anchor="ma",
+    )
+    return page
 
 
 if __name__ == "__main__":
-    main()
+    out_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "entry.png"
+    )
+    build_page().save(out_path, optimize=True)
+    print("wrote", out_path)
